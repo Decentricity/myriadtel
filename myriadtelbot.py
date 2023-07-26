@@ -34,20 +34,35 @@ def parse_post(post):
         result += f"URL: {url}\n"
     if parsed_text:  # Check if there is text
         result += f"Text: {parsed_text}\n"
-
     return result.strip()  # Remove any trailing newlines
 
 
 def parse_content(content):
     parsed_content = ""
+    images = []
+    embed_links = []
+
     # Check if content might be HTML
     if '<' in content and '>' in content:
         # If the content is HTML, remove the tags and any script/style content
         soup = BeautifulSoup(content, features="html.parser")
-        for script in soup(["script", "style"]): # remove all javascript and stylesheet code
-            script.extract()
+
+        # Extract image URLs
+        for img in soup.find_all('img', src=True):
+            images.append(img['src'])
+
+        # Extract URLs from iframe
+        for iframe in soup.find_all('iframe', src=True):
+            url = iframe['src']
+            embed_links.append(url)
+
+        # remove all javascript, stylesheet code, and img tags
+        for tag in soup(["script", "style", "img", "iframe"]):
+            tag.extract()
+
         parsed_content = soup.get_text(separator="\n")
         parsed_content = parsed_content.replace('&nbsp;', ' ')
+
     elif content.startswith('{') and content.endswith('}') or content.startswith('[') and content.endswith(']'):
         # If the content is JSON, extract the text
         try:
@@ -63,8 +78,16 @@ def parse_content(content):
     else:
         # If the content is just text, use it as is
         parsed_content = content
-    return parsed_content.strip()  # remove trailing newline if exists
 
+    parsed_content = parsed_content.strip()  # remove trailing newline if exists
+
+    # append image and embed links at the end
+    for img in images:
+        parsed_content += "\n" + img
+    for link in embed_links:
+        parsed_content += "\n" + link
+
+    return parsed_content
 
 def parse_dict(json_dict):
     parsed_content = ""
@@ -453,7 +476,7 @@ def main():
     initialize_file()
 
     # Replace YOUR_API_KEY with your actual API key
-    updater = Updater("xx:xxx")
+    updater = Updater("x:xxx")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
