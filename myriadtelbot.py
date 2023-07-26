@@ -17,58 +17,67 @@ import urllib.parse
 import re
 import json
 import html
-import re
 
-def parse_post(post):
-    title = post.get('title', '')  # Default to an empty string if no title is found
-    url = post.get('url', '')  # Default to an empty string if no url is found
+def create_comment(update: Update, post_id: str, comment_text: str) -> None:
+    url = 'https://api.myriad.social/user/comments'
+    
+    # Get the access token and Myriad username from the JSON file
+    username = update.message.from_user.username
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    access_token = data[username]['accesstoken']
+    myriad_username = data[username]['myriad_username']
 
-    text = post.get('text', '')  # Get the text content
-    # Handle nested complex JSON or HTML in the text
-    parsed_text = parse_content(text)  # Using the parse_content function defined earlier
+    payload = {
+        "text": comment_text,
+        "type": "comment",
+        "section": "discussion",
+        "referenceId": post_id,  # If this field is necessary, use the post_id as its value
+        "createdAt": datetime.now().isoformat(),
+        "updatedAt": datetime.now().isoformat(),
+        "userId": myriad_username,
+        "postId": post_id
+    }
 
-    result = ''
-    if title:  # Check if there is a title
-        result += f"Title: {title}\n"
-    if url:  # Check if there is a URL
-        result += f"URL: {url}\n"
-    if parsed_text:  # Check if there is text
-        result += f"Text: {parsed_text}\n"
-    return result.strip()  # Remove any trailing newlines
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + access_token,
+    }
 
+    # Print payload and headers for debugging
+    print(f"Request Payload: {json.dumps(payload, indent=4)}")
+    print(f"Request Headers: {json.dumps(headers, indent=4)}")
+
+    response = requests.request("POST", url, headers=headers, json=payload)
+
+    if response.status_code != 200:
+        print(f"Error: Received status code {response.status_code} from Myriad API.")
+        print(f"Response: {response.text}")
+        return
+
+    print("Comment created successfully!")
 
 def parse_content(content):
     parsed_content = ""
     images = []
     embed_links = []
 
-    # Check if content might be HTML
     if '<' in content and '>' in content:
-        # If the content is HTML, remove the tags and any script/style content
         soup = BeautifulSoup(content, features="html.parser")
-
-        # Extract image URLs
         for img in soup.find_all('img', src=True):
             images.append(img['src'])
-
-        # Extract URLs from iframe
         for iframe in soup.find_all('iframe', src=True):
             url = iframe['src']
             embed_links.append(url)
-
-        # remove all javascript, stylesheet code, and img tags
         for tag in soup(["script", "style", "img", "iframe"]):
             tag.extract()
-
         parsed_content = soup.get_text(separator="\n")
         parsed_content = parsed_content.replace('&nbsp;', ' ')
-
     elif content.startswith('{') and content.endswith('}') or content.startswith('[') and content.endswith(']'):
-        # If the content is JSON, extract the text
         try:
             json_content = json.loads(content)
         except json.JSONDecodeError:
-            return content
+            return content, [], []
         if isinstance(json_content, list):
             for item in json_content:
                 if 'type' in item and item['type'] == 'p' and 'children' in item:
@@ -76,18 +85,38 @@ def parse_content(content):
                         if 'text' in child:
                             parsed_content += child['text'] + '\n'
     else:
-        # If the content is just text, use it as is
         parsed_content = content
+    parsed_content = parsed_content.strip()
+    return parsed_content, images, embed_links
 
-    parsed_content = parsed_content.strip()  # remove trailing newline if exists
+def parse_post(post):
+    title = post.get('title', '')
+    post_id = post.get('id')
+    post_url = f"https://app.myriad.social/post/{post_id}"
+    text = post.get('text', '')
 
-    # append image and embed links at the end
+    parsed_text, images, embed_links = parse_content(text)
+    metrics = post.get('metric', {})
+    upvotes = metrics.get('upvotes', 0)
+    downvotes = metrics.get('downvotes', 0)
+    debates = metrics.get('debates', 0)
+    discussions = metrics.get('discussions', 0)
+    tips = metrics.get('tips', 0)
+    formatted_metrics = f"⬆️: {upvotes} | ⬇️: {downvotes} | ❌: {debates} | 💬: {discussions} | 🪙: {tips}"
+
+    result = ''
+    if title:
+        result += f"Title: {title}\n"
+    if parsed_text:
+        result += f"Text: {parsed_text}\n"
     for img in images:
-        parsed_content += "\n" + img
+        result += "\n" + img
     for link in embed_links:
-        parsed_content += "\n" + link
+        result += "\n" + link
+    result += f"\nURL: {post_url}\n"  # The post URL is always at the end
+    result += f"Metrics: {formatted_metrics}\n"
 
-    return parsed_content
+    return result.strip()
 
 def parse_dict(json_dict):
     parsed_content = ""
@@ -225,9 +254,24 @@ def create_myriad_post(update: Update, context: CallbackContext, title, text_blo
 
 def post(update: Update, context: CallbackContext) -> int:
     print("Entering post()")
-    
     command, *content = update.message.text.split(' ', 1)
     command = command.lower()
+        # If the message is a reply
+    if update.message.reply_to_message is not None:
+        # Get the text of the replied message
+        replied_text = update.message.reply_to_message.text
+        # Get the last URL in the text
+        urls = re.findall(r'(https?://[^\s]+)', replied_text)
+        last_url = urls[-1] if urls else None
+        # Extract the post ID from the URL
+        if last_url and "app.myriad.social/post/" in last_url:
+            post_id = last_url.split('/')[-1]
+            print(f"Post ID: {post_id}")
+            create_comment(update, post_id, update.message.text)
+            # Here you can do whatever you want with the post ID
+            return TOKEN
+
+
     
     if command == "post":
         if content:  # Check if there is any content
@@ -338,7 +382,7 @@ def magic_link(update: Update, context: CallbackContext) -> int:
         with open("emails.json", "w") as file:
             json.dump(data, file)
         update.message.reply_text("You are now logged in!")
-        return ConversationHandler.END
+        return TOKEN
     else:
         update.message.reply_text("Authentication failed. Please try again.")
         return MAGIC_LINK
@@ -476,7 +520,7 @@ def main():
     initialize_file()
 
     # Replace YOUR_API_KEY with your actual API key
-    updater = Updater("x:xxx")
+    updater = Updater("xxx:xxxx")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
