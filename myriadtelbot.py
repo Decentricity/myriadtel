@@ -20,6 +20,43 @@ import html
 from telegram import ParseMode
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler, CallbackQueryHandler
+from telegram import Message
+
+
+def m_view(update: Update, context: CallbackContext, content=None) -> int:
+    if content is None:
+        content = context.args if context.args else update.message.text.split(' ', 1)[1:]
+
+    if content:  # Check if there is any content
+        limit = content[0].strip()
+        if limit.isdigit():
+            limit = int(limit)
+            if limit <= 0:
+                update.message.reply_text("The number of posts to view must be greater than zero.")
+                return TOKEN
+        else:
+            update.message.reply_text("Invalid number of posts to view.")
+            return TOKEN
+    else:
+        limit = 10  # Default number of posts to view
+
+    # Get the posts from the API
+    response = requests.get(f'https://api.myriad.social//user/posts?pageLimit={limit}')
+
+    if response.status_code != 200:
+        update.message.reply_text(f"Error: Received status code {response.status_code} from Myriad API.")
+        return TOKEN
+
+    posts = json.loads(response.text)['data']
+    message_to_send = update.message if update.message else update.callback_query.message
+    for i, post in enumerate(posts, start=1):
+        user = post['user']['name']
+        text = parse_post(post)  # Parse the post here  # Parse the content here
+        message = f"{i}. {user}: {text}\n\n"  # Create message for each post
+        message_to_send.reply_text(message.strip(), parse_mode=ParseMode.HTML)  # Send each post as a separate message
+
+    return TOKEN
+
 
 
 def create_comment(update: Update, post_id: str, comment_text: str) -> None:
@@ -60,6 +97,7 @@ def create_comment(update: Update, post_id: str, comment_text: str) -> None:
         return
 
     print("Comment created successfully!")
+    update.message.reply_text("Comment created successfully!")
 
 def parse_content(content):
     parsed_content = ""
@@ -159,6 +197,7 @@ def embed(update: Update, context: CallbackContext, message: str):
         title = "Embedded Video"
         create_myriad_post(update, context, title, text_blocks)
 
+
     else:
         video_html = "There was no URL detected in your message."
         update.message.reply_text(video_html)
@@ -202,8 +241,11 @@ def import_post(update: Update, context: CallbackContext, post_url, importer="tw
     if response.status_code == 200:
         update.message.reply_text("Post successfully imported into Myriad.")
         print("Post successfully imported into Myriad.")
+        m_view(update, context, ["1"])  
     else:
         update.message.reply_text(f"Error importing post: {response.status_code}")
+        if response.status_code == 409:
+            update.message.reply_text(f"Post may have already been imported.")
         print(f"Error importing post: {response.status_code}")
     return TOKEN
 
@@ -252,15 +294,22 @@ def create_myriad_post(update: Update, context: CallbackContext, title, text_blo
     if response.status_code == 200:
         update.message.reply_text("Post created successfully!")
         print("Post created successfully!")
+        m_view(update, context, ["1"])  
     else:
         update.message.reply_text(f"Error creating post: {response.status_code}")
         print(f"Error creating post: {response.status_code}")
 
     return TOKEN
     
-def m_post(update: Update, context: CallbackContext, content: str) -> int:
+    
+def m_post(update: Update, context: CallbackContext) -> int:
+    if context.args:  # If the command is used with a slash
+        content = context.args
+    else:  # If the command is used without a slash
+        content = update.message.text.split(' ')[1:]  # Split the message text and exclude the command
+
     if content:  # Check if there is any content
-        content = content[0].split('\n\n')
+        content = ' '.join(content).split('\n\n')  # Join the content into a single string before splitting
         content = [c.strip() for c in content if c.strip()]  # Remove whitespace-only strings
         if not content:  # Check if the content is empty
             update.message.reply_text("Cannot create an empty post.")
@@ -271,59 +320,69 @@ def m_post(update: Update, context: CallbackContext, content: str) -> int:
         update.message.reply_text("Cannot create an empty post.")
     return TOKEN
 
-def m_import(update: Update, context: CallbackContext, content: str) -> int:
+def m_import(update: Update, context: CallbackContext) -> int:
+    if context.args:  # If the command is used with a slash
+        content = context.args
+    else:  # If the command is used without a slash
+        content = update.message.text.split(' ')[1:]  # Split the message text and exclude the command
+
     if content:  # Check if there is any content
-        url = content[0].strip()
-        parsed_url = urllib.parse.urlparse(url)
-        if parsed_url.netloc in ['twitter.com', 'www.twitter.com', 'reddit.com', 'www.reddit.com', 'x.com', 'www.x.com']:
-            import_post(update, context, url)
+        # Extract the first URL in the content
+        urls = re.findall(r'(https?://[^\s]+)', ' '.join(content))
+        if urls:
+            url = urls[0]
+            parsed_url = urllib.parse.urlparse(url)
+            if parsed_url.netloc in ['twitter.com', 'www.twitter.com', 'reddit.com', 'www.reddit.com', 'x.com', 'www.x.com']:
+                import_post(update, context, url)
+ 
+            else:
+                update.message.reply_text("Invalid URL. Only URLs from twitter.com, reddit.com, and x.com are supported.")
+                return TOKEN
         else:
-            update.message.reply_text("Invalid URL. Only URLs from twitter.com, reddit.com, and x.com are supported.")
-            return TOKEN
+            update.message.reply_text("No URL provided to import.")
     else:
         update.message.reply_text("No URL provided to import.")
     return TOKEN
 
-def m_embed(update: Update, context: CallbackContext, content: str) -> int:
+
+def m_embed(update: Update, context: CallbackContext) -> int:
+    if context.args:  # If the command is used with a slash
+        content = context.args
+    else:  # If the command is used without a slash
+        content = update.message.text.split(' ')[1:]  # Split the message text and exclude the command
+
     if content:
-        embed(update, context, content[0])
+        # Join the content into a single string before passing it to the embed function
+        content_str = ' '.join(content)
+        # Convert youtu.be links to youtube.com links
+        content_str = re.sub(r'https?://youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', content_str)
+        embed(update, context, content_str)
     else:
         update.message.reply_text("No URL provided to embed.")
     return TOKEN
 
-def m_view(update: Update, context: CallbackContext, content: str) -> int:
-    if content:  # Check if there is any content
-        limit = content[0].strip()
-        if limit.isdigit():
-            limit = int(limit)
-            if limit <= 0:
-                update.message.reply_text("The number of posts to view must be greater than zero.")
-                return TOKEN
-        else:
-            update.message.reply_text("Invalid number of posts to view.")
-            return TOKEN
+def nakedurl(update: Update, context: CallbackContext) -> int:
+    url = update.message.text.strip()
+    # Convert youtu.be links to youtube.com links
+    url = re.sub(r'https?://youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', url)
+    parsed_url = urllib.parse.urlparse(url)
+    netloc = parsed_url.netloc
+
+    # Pass the URL as part of context.args
+    context.args = [url]
+
+    if netloc in ['twitter.com', 'www.twitter.com', 'reddit.com', 'www.reddit.com']:
+        return m_import(update, context)
+    elif netloc in ['youtube.com', 'www.youtube.com', 'twitch.tv', 'www.twitch.tv']:
+        return m_embed(update, context)
     else:
-        limit = 10  # Default number of posts to view
-
-    # Get the posts from the API
-    response = requests.get(f'https://api.myriad.social//user/posts?pageLimit={limit}')
-
-    if response.status_code != 200:
-        update.message.reply_text(f"Error: Received status code {response.status_code} from Myriad API.")
+        update.message.reply_text("Invalid URL. Only URLs from twitter.com, reddit.com, youtube.com, and twitch.tv are supported.")
         return TOKEN
 
-    posts = json.loads(response.text)['data']
-    message = ''
-    for i, post in enumerate(posts, start=1):
-        user = post['user']['name']
-        text = parse_post(post)  # Parse the post here  # Parse the content here
-        message = f"{i}. {user}: {text}\n\n"
-
-        # Send the posts to the user
-        update.message.reply_text(message.strip(), parse_mode=ParseMode.HTML)
 
 
-    return TOKEN
+
+import re
 
 def post(update: Update, context: CallbackContext) -> int:
     print("Entering post()")
@@ -344,16 +403,22 @@ def post(update: Update, context: CallbackContext) -> int:
             # Here you can do whatever you want with the post ID
             return TOKEN
 
+    # Check if the command is a URL
+    url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
+    if url_pattern.match(command):
+        return nakedurl(update, context)
+
     if command == "post":
-        return m_post(update, context, content)
+        return m_post(update, context)
     elif command == "import":
-        return m_import(update, context, content)
+        return m_import(update, context)
     elif command == "embed":
-        return m_embed(update, context, content)
+        return m_embed(update, context)
     elif command == "view":
-        return m_view(update, context, content)
+        return m_view(update, context)
 
     return TOKEN
+
 
 
 
@@ -517,6 +582,30 @@ def email(update: Update, context: CallbackContext) -> int:
         
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+def instructions(update: Update, context: CallbackContext):
+    update.message.reply_text(
+        "Here are the commands you can use:\n\n"
+        "1. /start: Logs you into the bot. You need to be logged in to use the other commands.\n\n"
+        "2. /view or \"view\": Shows you the most recent posts. For example, \"view 10\" or \"/view 10\" will show you the last 10 posts.\n\n"
+        "3. /post or \"post\": Allows you to create a new post. For example, \"post Happy Birthday!\" or \"/post Happy Birthday!\" will create a new post with the text \"Happy Birthday!\".\n\n"
+        "4. /import or \"import\": Imports a post from Reddit or Twitter. For example, \"import URL\" or \"/import URL\" where URL is the link to the Reddit or Twitter post you want to import.\n\n"
+        "5. /embed or \"embed\": Imports a video from YouTube or Twitch and allows you to add a caption. For example, \"embed caption URL caption2\" or \"/embed caption URL caption2\" where URL is the link to the YouTube or Twitch video you want to import, and \"caption caption2\" is the caption you want to add to the post.\n\n"
+        "Additionally, if you send a URL to the bot without any command, the bot will automatically check if the URL is from Reddit, Twitter, YouTube, or Twitch. If it is, the bot will import the post or video without a caption.\n\n"
+        "Remember, you can always type /instructions to see these instructions again. Enjoy using the Myriad Social Telegram bot!"
+    )
+def inlinekeys(update: Update, context: CallbackContext):
+    keyboard = [
+        [
+            InlineKeyboardButton("1", callback_data='view_posts 1'),
+            InlineKeyboardButton("5", callback_data='view_posts 5'),
+            InlineKeyboardButton("15", callback_data='view_posts 15'),
+            InlineKeyboardButton("20", callback_data='view_posts 20'),
+            InlineKeyboardButton("25", callback_data='view_posts 25'),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text('How many posts would you like to see?', reply_markup=reply_markup)
+
 # Command handler for /start command
 def start(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Hi, I am the official <a href='https://myriad.social'>Myriad Social</a> Telegram bot!", parse_mode=ParseMode.HTML)
@@ -528,16 +617,10 @@ def start(update: Update, context: CallbackContext) -> int:
     with open("emails.json", "r") as file:
         data = json.load(file)
     if username in data and 'accesstoken' in data[username]:
-        # Create an inline keyboard
-        keyboard = [
-            [
-                InlineKeyboardButton("View Posts", callback_data='view_posts'),
-                InlineKeyboardButton("Write Post", callback_data='write_post'),
-                InlineKeyboardButton("Import/Embed", callback_data='import_post'),
-            ]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        update.message.reply_text('You are already logged in. Here are a few things you can do:', reply_markup=reply_markup)
+        
+        update.message.reply_text('You are already logged in.')
+        instructions(update,context)
+        inlinekeys(update,context)
         return TOKEN
     elif username:
         update.message.reply_text("You are not logged in! If you have not created an account yet, create an account <a href='https://app.myriad.social/login?instance=https%3A%2F%2Fapi.myriad.social'>here</a>.", parse_mode=ParseMode.HTML)
@@ -564,6 +647,8 @@ def token(update: Update, context: CallbackContext) -> int:
         with open("emails.json", "w") as file:
             json.dump(data, file)
         update.message.reply_text("You are now logged in!")
+        instructions(update,context)
+        inlinekeys(update,context)
     else:
         update.message.reply_text("Authentication failed. Please try again.")
     return ConversationHandler.END
@@ -576,30 +661,25 @@ def handle_text(update: Update, context: CallbackContext):
         return post(update, context)
     else:
         update.message.reply_text("You're not logged in. Please use the /start command to log in.")
-
+        
 def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
 
     # CallbackQueries need to be answered, even if no notification to the user is needed
     query.answer()
 
-    if query.data == 'view_posts':
+    command, *args = query.data.split(' ')
+    if command == 'view_posts':
         # Handle 'View Posts' button press
-        
-        pass
-    elif query.data == 'write_post':
-        # Handle 'Write a Post' button press
-        pass
-    elif query.data == 'import_post':
-        # Handle 'Import/Embed Post' button press
-        pass
+        m_view(update, context, args)
+
 
 
 # Message handler for cancellation
 def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text('Operation cancelled.')
     return ConversationHandler.END
-
+    
 def main():
     initialize_file()
 
@@ -617,10 +697,15 @@ def main():
             TOKEN: [MessageHandler(Filters.text & ~Filters.command, post)],
         },
         fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(button)],
-
     )
 
     dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('start', start))
+    dispatcher.add_handler(CommandHandler('instructions', instructions))
+    dispatcher.add_handler(CommandHandler('post', m_post))
+    dispatcher.add_handler(CommandHandler('import', m_import))
+    dispatcher.add_handler(CommandHandler('embed', m_embed))
+    dispatcher.add_handler(CommandHandler('view', m_view))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
     # Start the bot
     updater.start_polling()
