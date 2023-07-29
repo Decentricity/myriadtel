@@ -17,6 +17,8 @@ import urllib.parse
 import re
 import json
 import html
+from telegram import ParseMode
+
 
 def create_comment(update: Update, post_id: str, comment_text: str) -> None:
     url = 'https://api.myriad.social/user/comments'
@@ -353,11 +355,38 @@ def is_user_logged_in(username):
         return True
     else:
         return False
+        
+        
+# Function to get the state of a user
+def get_user_state(username):
+    # Load the JSON data from the file
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    # Return the state of the user if it exists, otherwise return None
+    return data[username].get('state', None) if username in data else None
 
+        
+# Function to set the state of a user
+def set_user_state(username, state):
+    # Load the JSON data from the file
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    # Set the state of the user
+    if username in data:
+        data[username]['state'] = state
+    # Save the data back to the file
+    with open("emails.json", "w") as file:
+        json.dump(data, file)
+        
 # Message handler for MAGIC_LINK state
 def magic_link(update: Update, context: CallbackContext) -> int:
     magic_link = update.message.text
     username = update.message.from_user.username
+
+    # Check if the user is in the MAGIC_LINK state
+    if get_user_state(username) != 'MAGIC_LINK':
+        update.message.reply_text("Unexpected magic link. Please start the login process with /start.")
+        return ConversationHandler.END
 
     with open("emails.json", "r") as file:
         data = json.load(file)
@@ -368,7 +397,7 @@ def magic_link(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Magic link received! Now we'll try to authenticate you.")
     
     auth=magic_link.replace(callback_url+"?token=","")
- # ...
+    # ...
     response = authenticate(auth)
     if response is not None:
         # Retrieve the access token and username
@@ -379,6 +408,8 @@ def magic_link(update: Update, context: CallbackContext) -> int:
         if username in data:
             data[username]['accesstoken'] = accesstoken
             data[username]['myriad_username'] = myriad_username  # Save the Myriad username
+            # Set the state of the user to TOKEN
+            set_user_state(username, 'TOKEN')
         with open("emails.json", "w") as file:
             json.dump(data, file)
         update.message.reply_text("You are now logged in!")
@@ -386,6 +417,7 @@ def magic_link(update: Update, context: CallbackContext) -> int:
     else:
         update.message.reply_text("Authentication failed. Please try again.")
         return MAGIC_LINK
+
 
 
 
@@ -408,6 +440,8 @@ def send_magic_link(email, username, update: Update, context: CallbackContext) -
     if response.status_code == 200:
         update.message.reply_text(f"Magic link successfully sent to {email}.")
         update.message.reply_text("Please check your email, then copy and paste the magic link here.")
+        # Set the state of the user to MAGIC_LINK
+        set_user_state(username, 'MAGIC_LINK')
         return MAGIC_LINK
     else:
         update.message.reply_text(f"Error sending magic link: {response.status_code}")
@@ -450,17 +484,6 @@ def initialize_file():
         with open("emails.json", "w") as file:
             json.dump({}, file)
 
-# Command handler for /start command
-def start(update: Update, context: CallbackContext) -> int:
-    username = update.message.from_user.username
-    with open("emails.json", "r") as file:
-        data = json.load(file)
-    if username in data and 'accesstoken' in data[username]:
-        update.message.reply_text('You are already logged in.')
-        return TOKEN
-    else:
-        update.message.reply_text('Please enter your Myriad email:')
-        return EMAIL
 
 # Message handler for EMAIL state
 def email(update: Update, context: CallbackContext) -> int:
@@ -480,7 +503,28 @@ def email(update: Update, context: CallbackContext) -> int:
         update.message.reply_text(f"Email saved: {user_input}")
         send_magic_link(user_input, username, update, context)
         return MAGIC_LINK
-
+        
+# Command handler for /start command
+def start(update: Update, context: CallbackContext) -> int:
+    update.message.reply_text("Hi, I am the official <a href='https://myriad.social'>Myriad Social</a> Telegram bot!", parse_mode=ParseMode.HTML)
+    username = update.message.from_user.username
+    if username:
+        update.message.reply_text(f'{username}, let me check if you are already logged in.')
+    else:
+        update.message.reply_text('Sorry, the Myriad bot requires you to have set a Telegram @username. Please go to your Telegram settings to set a @username of your own. After you have done so, you may press /start again.')
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    if username in data and 'accesstoken' in data[username]:
+        update.message.reply_text('You are already logged in.')
+        return TOKEN
+    elif username:
+        update.message.reply_text("You are not logged in! If you have not created an account yet, create an account <a href='https://app.myriad.social/login?instance=https%3A%2F%2Fapi.myriad.social'>here</a>.", parse_mode=ParseMode.HTML)
+        update.message.reply_text("If you have a Myriad account, but have not activated email login, click <a href='https://app.myriad.social/settings?section=email&instance=https%3A%2F%2Fapi.myriad.social'>here</a>.", parse_mode=ParseMode.HTML)
+        update.message.reply_text('If you already have a Myriad account connected to an email address, please enter that email below:')
+        # Set the state of the user to EMAIL
+        set_user_state(username, 'EMAIL')
+        return EMAIL
+        
 
 # Message handler for TOKEN state
 def token(update: Update, context: CallbackContext) -> int:
@@ -519,8 +563,8 @@ def cancel(update: Update, context: CallbackContext) -> int:
 def main():
     initialize_file()
 
-    # Replace YOUR_API_KEY with your actual API key
-    updater = Updater("xxx:xxxx")
+    # Replace YOUR_API_KEY with your actual Telegram API key (not the social media api key)
+    updater = Updater("")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
