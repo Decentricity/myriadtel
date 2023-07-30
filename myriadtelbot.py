@@ -2,7 +2,6 @@ import json
 import requests
 import os
 import re
-import requests
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 callback_url = "https://app.myriad.social/login"
@@ -14,13 +13,74 @@ EMAIL, MAGIC_LINK, TOKEN = range(3)
 base_url = "https://api.myriad.social"
 
 import urllib.parse
-import re
-import json
 import html
 from telegram import ParseMode
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler, CallbackQueryHandler
 from telegram import Message
+
+def get_user_id(username, at):
+    print("Entering get_user_id()")
+
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    myriad_username = data[username]['myriad_username']  # Extract the Myriad username
+
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + at,
+    }
+
+    response = requests.get(f"https://api.myriad.social/users/{myriad_username}", headers=headers)
+    if response.status_code == 200:
+        user_data = json.loads(response.text)
+        user_id = user_data.get("id")
+        print(f"User ID: {user_id}")
+        return user_id
+    else:
+        print(f"Error retrieving user ID: {response.status_code}")
+        return None
+
+
+
+def upvote(update: Update, context: CallbackContext, post_id):
+    print("Entering upvote()")
+
+
+    username = update.callback_query.from_user.username
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    at = data[username]['accesstoken']
+
+    user_id = get_user_id(username, at)  # Get the user ID
+    if user_id is None:
+        print("Upvote failed: Could not retrieve user ID.")
+        return
+
+
+    url = "https://api.myriad.social/user/votes"
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + at,
+    }
+    data = {
+        "type": "post",
+        "referenceId": post_id,  # Assuming the post ID can be used as the reference ID
+        "postId": post_id,
+        "state": True,
+        "userId": user_id
+    }
+    response = requests.post(url, headers=headers, json=data)
+
+    print(f"Response status code: {response.status_code}")
+    print(f"Response body: {response.text}")
+
+    if response.status_code == 200:
+        print("Upvote successful")
+    else:
+        print("Upvote failed")
 
 
 def m_view(update: Update, context: CallbackContext, content=None) -> int:
@@ -53,9 +113,19 @@ def m_view(update: Update, context: CallbackContext, content=None) -> int:
         user = post['user']['name']
         text = parse_post(post)  # Parse the post here  # Parse the content here
         message = f"{i}. {user}: {text}\n\n"  # Create message for each post
-        message_to_send.reply_text(message.strip(), parse_mode=ParseMode.HTML)  # Send each post as a separate message
+
+        # Create an inline keyboard with "thumbs up" and "thumbs down" buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("👍", callback_data=f'upvote'),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        message_to_send.reply_text(message.strip(), reply_markup=reply_markup, parse_mode=ParseMode.HTML)  # Send each post as a separate message
 
     return TOKEN
+
 
 
 
@@ -585,11 +655,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 def instructions(update: Update, context: CallbackContext):
     update.message.reply_text(
         "Here are the commands you can use:\n\n"
-        "1. /start: Logs you into the bot. You need to be logged in to use the other commands.\n\n"
-        "2. /view or \"view\": Shows you the most recent posts. For example, \"view 10\" or \"/view 10\" will show you the last 10 posts.\n\n"
-        "3. /post or \"post\": Allows you to create a new post. For example, \"post Happy Birthday!\" or \"/post Happy Birthday!\" will create a new post with the text \"Happy Birthday!\".\n\n"
-        "4. /import or \"import\": Imports a post from Reddit or Twitter. For example, \"import URL\" or \"/import URL\" where URL is the link to the Reddit or Twitter post you want to import.\n\n"
-        "5. /embed or \"embed\": Imports a video from YouTube or Twitch and allows you to add a caption. For example, \"embed caption URL caption2\" or \"/embed caption URL caption2\" where URL is the link to the YouTube or Twitch video you want to import, and \"caption caption2\" is the caption you want to add to the post.\n\n"
+        "1. /start: Logs you into the bot. You need to be logged in to use the other commands.\n"
+        "2. /view or \"view\": Shows you the most recent posts. For example, \"view 10\" or \"/view 10\" will show you the last 10 posts.\n"
+        "3. /post or \"post\": Allows you to create a new post. For example, \"post Happy Birthday!\" or \"/post Happy Birthday!\" will create a new post with the text \"Happy Birthday!\".\n"
+        "4. /import or \"import\": Imports a post from Reddit or Twitter. For example, \"import URL\" or \"/import URL\" where URL is the link to the Reddit or Twitter post you want to import.\n"
+        "5. /embed or \"embed\": Imports a video from YouTube or Twitch and allows you to add a caption. For example, \"embed caption URL caption2\" or \"/embed caption URL caption2\" where URL is the link to the YouTube or Twitch video you want to import, and \"caption caption2\" is the caption you want to add to the post.\n"
+        "6. Replying to any Myriad post shown on Telegram will let you comment on that post!\n\n"
         "Additionally, if you send a URL to the bot without any command, the bot will automatically check if the URL is from Reddit, Twitter, YouTube, or Twitch. If it is, the bot will import the post or video without a caption.\n\n"
         "Remember, you can always type /instructions to see these instructions again. Enjoy using the Myriad Social Telegram bot!"
     )
@@ -672,7 +743,17 @@ def button(update: Update, context: CallbackContext) -> None:
     if command == 'view_posts':
         # Handle 'View Posts' button press
         m_view(update, context, args)
-
+    elif command == 'upvote':
+        # Extract the post ID from the URL in the message text
+        message_text = query.message.text
+        url_pattern = re.compile(r'https://app.myriad.social/post/(\w+)')
+        match = url_pattern.search(message_text)
+        if match:
+            post_id = match.group(1)
+            # Handle 'upvote' button press
+            upvote(update, context, post_id)
+        else:
+            update.message.reply_text("No Myriad URL found in the message text.")
 
 
 # Message handler for cancellation
@@ -683,7 +764,7 @@ def cancel(update: Update, context: CallbackContext) -> int:
 def main():
     initialize_file()
 
-    # Replace YOUR_API_KEY with your actual Telegram API key (not the social media api key)
+    # Replace YOUR_API_KEY with your actual Telegram API key (not the Myriad api key)
     updater = Updater("")
 
     # Get the dispatcher to register handlers
@@ -696,7 +777,7 @@ def main():
             MAGIC_LINK: [MessageHandler(Filters.text & ~Filters.command, magic_link)],
             TOKEN: [MessageHandler(Filters.text & ~Filters.command, post)],
         },
-        fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(button)],
+        fallbacks=[CommandHandler('cancel', cancel)],
     )
 
     dispatcher.add_handler(conv_handler)
@@ -707,6 +788,7 @@ def main():
     dispatcher.add_handler(CommandHandler('embed', m_embed))
     dispatcher.add_handler(CommandHandler('view', m_view))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    dispatcher.add_handler(CallbackQueryHandler(button))  # Add the CallbackQueryHandler directly to the dispatcher
     # Start the bot
     updater.start_polling()
 
@@ -714,6 +796,9 @@ def main():
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
     updater.idle()
+
+if __name__ == "__main__":
+    main()
 
 if __name__ == "__main__":
     main()
