@@ -821,7 +821,7 @@ def main():
     initialize_file()
 
     # Replace YOUR_API_KEY with your actual Telegram API key (not the Myriad api key)
-    updater = Updater("6633203128:AAHmQZCQvicXeTh68Cy3vmR7IiDq4o318AU")
+    updater = Updater("")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
@@ -856,5 +856,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-if __name__ == "__main__":
-    main()
