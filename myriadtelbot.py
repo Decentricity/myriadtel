@@ -41,8 +41,36 @@ def get_user_id(username, at):
     else:
         print(f"Error retrieving user ID: {response.status_code}")
         return None
+        
+import urllib.parse
 
+def view_comments(update: Update, context: CallbackContext, post_id: str) -> None:
+    print("Entering view_comments()")
+    
+    username = update.callback_query.from_user.username
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+    at = data[username]['accesstoken']
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + at,
+    }
+    print(f"{base_url}/user/comments?postId={post_id}")
+    api_endpoint = f"{base_url}/user/comments?postId={post_id}"
 
+    response = requests.get(api_endpoint, headers=headers)
+    if response.status_code == 200:
+        comments_data = response.json()
+        comments = comments_data.get("data", [])
+        if comments:
+            for comment in comments:
+                text = comment.get("text")
+                update.callback_query.message.reply_text(text)
+        else:
+            update.callback_query.message.reply_text("No comments found for this post.")
+    else:
+        print(f"Error retrieving comments: {response.status_code}")
 
 def upvote(update: Update, context: CallbackContext, post_id):
     print("Entering upvote()")
@@ -118,6 +146,7 @@ def m_view(update: Update, context: CallbackContext, content=None) -> int:
         keyboard = [
             [
                 InlineKeyboardButton("👍", callback_data=f'upvote'),
+                #InlineKeyboardButton("View Comments", callback_data=f'view_comments {post["id"]}')
             ]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -485,7 +514,8 @@ def post(update: Update, context: CallbackContext) -> int:
     elif command == "embed":
         return m_embed(update, context)
     elif command == "view":
-        return m_view(update, context)
+        #return m_view(update, context)
+        viewbuttons(update,context)
 
     return TOKEN
 
@@ -653,10 +683,15 @@ def email(update: Update, context: CallbackContext) -> int:
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 def instructions(update: Update, context: CallbackContext):
-    update.message.reply_text(
+    if update.callback_query:
+        message = update.callback_query.message
+    else:
+        message = update.message
+
+    message.reply_text(
         "Here are the commands you can use:\n\n"
         "1. /start: Logs you into the bot. You need to be logged in to use the other commands.\n"
-        "2. /view or \"view\": Shows you the most recent posts. For example, \"view 10\" or \"/view 10\" will show you the last 10 posts.\n"
+        "2. /view or \"view\": Shows you the most recent posts.\n"
         "3. /post or \"post\": Allows you to create a new post. For example, \"post Happy Birthday!\" or \"/post Happy Birthday!\" will create a new post with the text \"Happy Birthday!\".\n"
         "4. /import or \"import\": Imports a post from Reddit or Twitter. For example, \"import URL\" or \"/import URL\" where URL is the link to the Reddit or Twitter post you want to import.\n"
         "5. /embed or \"embed\": Imports a video from YouTube or Twitch and allows you to add a caption. For example, \"embed caption URL caption2\" or \"/embed caption URL caption2\" where URL is the link to the YouTube or Twitch video you want to import, and \"caption caption2\" is the caption you want to add to the post.\n"
@@ -664,42 +699,55 @@ def instructions(update: Update, context: CallbackContext):
         "Additionally, if you send a URL to the bot without any command, the bot will automatically check if the URL is from Reddit, Twitter, YouTube, or Twitch. If it is, the bot will import the post or video without a caption.\n\n"
         "Remember, you can always type /instructions to see these instructions again. Enjoy using the Myriad Social Telegram bot!"
     )
-def inlinekeys(update: Update, context: CallbackContext):
+
+def viewbuttons(update: Update, context: CallbackContext):
+    if update.callback_query:
+        message = update.callback_query.message
+    else:
+        message = update.message
+
     keyboard = [
         [
             InlineKeyboardButton("1", callback_data='view_posts 1'),
             InlineKeyboardButton("5", callback_data='view_posts 5'),
-            InlineKeyboardButton("15", callback_data='view_posts 15'),
+            InlineKeyboardButton("10", callback_data='view_posts 10'),
             InlineKeyboardButton("20", callback_data='view_posts 20'),
             InlineKeyboardButton("25", callback_data='view_posts 25'),
         ],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    update.message.reply_text('How many posts would you like to see?', reply_markup=reply_markup)
+    message.reply_text('How many recent posts would you like to see?', reply_markup=reply_markup)
 
 # Command handler for /start command
 def start(update: Update, context: CallbackContext) -> int:
-    update.message.reply_text("Hi, I am the official <a href='https://myriad.social'>Myriad Social</a> Telegram bot!", parse_mode=ParseMode.HTML)
     username = update.message.from_user.username
-    if username:
-        update.message.reply_text(f'{username}, let me check if you are already logged in.')
-    else:
+    chat_type = update.message.chat.type
+
+    if not username:
         update.message.reply_text('Sorry, the Myriad bot requires you to have set a Telegram @username. Please go to your Telegram settings to set a @username of your own. After you have done so, you may press /start again.')
+        return
+
     with open("emails.json", "r") as file:
         data = json.load(file)
+
     if username in data and 'accesstoken' in data[username]:
-        
-        update.message.reply_text('You are already logged in.')
-        instructions(update,context)
-        inlinekeys(update,context)
+        keyboard = [[InlineKeyboardButton("Instructions", callback_data='instructions'), InlineKeyboardButton("View Posts", callback_data='viewbuttons')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        update.message.reply_text('You are already logged in. If you don\'t remember the commands, click the "Instructions" button. If you want to view posts, click the "View Posts" button.', reply_markup=reply_markup)
         return TOKEN
-    elif username:
+    elif chat_type != 'private':
+        update.message.reply_text('Please send the /start command in a private message to the bot to log in.')
+    else:
+        update.message.reply_text("Hi, I am the official <a href='https://myriad.social'>Myriad Social</a> Telegram bot!", parse_mode=ParseMode.HTML)
+        update.message.reply_text(f'{username}, let me check if you are already logged in.')
         update.message.reply_text("You are not logged in! If you have not created an account yet, create an account <a href='https://app.myriad.social/login?instance=https%3A%2F%2Fapi.myriad.social'>here</a>.", parse_mode=ParseMode.HTML)
         update.message.reply_text("If you have a Myriad account, but have not activated email login, click <a href='https://app.myriad.social/settings?section=email&instance=https%3A%2F%2Fapi.myriad.social'>here</a>.", parse_mode=ParseMode.HTML)
         update.message.reply_text('If you already have a Myriad account connected to an email address, please enter that email below:')
         # Set the state of the user to EMAIL
         set_user_state(username, 'EMAIL')
         return EMAIL
+
+
 
         
 
@@ -719,7 +767,7 @@ def token(update: Update, context: CallbackContext) -> int:
             json.dump(data, file)
         update.message.reply_text("You are now logged in!")
         instructions(update,context)
-        inlinekeys(update,context)
+        viewbuttons(update,context)
     else:
         update.message.reply_text("Authentication failed. Please try again.")
     return ConversationHandler.END
@@ -735,25 +783,33 @@ def handle_text(update: Update, context: CallbackContext):
         
 def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
-
-    # CallbackQueries need to be answered, even if no notification to the user is needed
     query.answer()
 
     command, *args = query.data.split(' ')
     if command == 'view_posts':
-        # Handle 'View Posts' button press
         m_view(update, context, args)
     elif command == 'upvote':
-        # Extract the post ID from the URL in the message text
         message_text = query.message.text
         url_pattern = re.compile(r'https://app.myriad.social/post/(\w+)')
         match = url_pattern.search(message_text)
         if match:
             post_id = match.group(1)
-            # Handle 'upvote' button press
             upvote(update, context, post_id)
         else:
             update.message.reply_text("No Myriad URL found in the message text.")
+    elif command == 'view_comments':
+        message_text = query.message.text
+        url_pattern = re.compile(r'https://app.myriad.social/post/(\w+)')
+        match = url_pattern.search(message_text)
+        if match:
+            post_id = match.group(1)
+            view_comments(update, context, post_id)
+        else:
+            update.message.reply_text("No Myriad URL found in the message text.")
+    elif command == 'instructions':
+        instructions(update, context)
+    elif command == 'viewbuttons':
+        viewbuttons(update, context)
 
 
 # Message handler for cancellation
@@ -765,7 +821,7 @@ def main():
     initialize_file()
 
     # Replace YOUR_API_KEY with your actual Telegram API key (not the Myriad api key)
-    updater = Updater("")
+    updater = Updater("6633203128:AAHmQZCQvicXeTh68Cy3vmR7IiDq4o318AU")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
@@ -786,7 +842,7 @@ def main():
     dispatcher.add_handler(CommandHandler('post', m_post))
     dispatcher.add_handler(CommandHandler('import', m_import))
     dispatcher.add_handler(CommandHandler('embed', m_embed))
-    dispatcher.add_handler(CommandHandler('view', m_view))
+    dispatcher.add_handler(CommandHandler('view', viewbuttons))
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
     dispatcher.add_handler(CallbackQueryHandler(button))  # Add the CallbackQueryHandler directly to the dispatcher
     # Start the bot
