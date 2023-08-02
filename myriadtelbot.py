@@ -435,7 +435,7 @@ def m_import(update: Update, context: CallbackContext) -> int:
                 import_post(update, context, url)
  
             else:
-                update.message.reply_text("Invalid URL. Only URLs from twitter.com, reddit.com, and x.com are supported.")
+                #update.message.reply_text("Invalid URL. Only URLs from twitter.com, reddit.com, and x.com are supported.")
                 return TOKEN
         else:
             update.message.reply_text("No URL provided to import.")
@@ -462,6 +462,8 @@ def m_embed(update: Update, context: CallbackContext) -> int:
 
 def nakedurl(update: Update, context: CallbackContext) -> int:
     url = update.message.text.strip()
+    chat_type = update.message.chat.type
+    
     # Convert youtu.be links to youtube.com links
     url = re.sub(r'https?://youtu\.be/([a-zA-Z0-9_-]+)', r'https://www.youtube.com/watch?v=\1', url)
     parsed_url = urllib.parse.urlparse(url)
@@ -469,8 +471,10 @@ def nakedurl(update: Update, context: CallbackContext) -> int:
 
     # Pass the URL as part of context.args
     context.args = [url]
-
-    if netloc in ['twitter.com', 'www.twitter.com', 'reddit.com', 'www.reddit.com']:
+    if chat_type != 'private':
+        print('Entered nakedurl(), but it is a group chat')
+        return TOKEN
+    elif netloc in ['twitter.com', 'www.twitter.com', 'reddit.com', 'www.reddit.com']:
         return m_import(update, context)
     elif netloc in ['youtube.com', 'www.youtube.com', 'twitch.tv', 'www.twitch.tv']:
         return m_embed(update, context)
@@ -506,8 +510,10 @@ def post(update: Update, context: CallbackContext) -> int:
     url_pattern = re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+')
     if url_pattern.match(command):
         return nakedurl(update, context)
-
-    if command == "post":
+    chat_type = update.message.chat.type
+    if chat_type != 'private':
+        return TOKEN
+    elif command == "post":
         return m_post(update, context)
     elif command == "import":
         return m_import(update, context)
@@ -779,7 +785,7 @@ def handle_text(update: Update, context: CallbackContext):
     if is_user_logged_in(username):
         return post(update, context)
     else:
-        update.message.reply_text("You're not logged in. Please use the /start command to log in.")
+        print("You're not logged in. Please use the /start command to log in.")
         
 def button(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
@@ -821,7 +827,7 @@ def main():
     initialize_file()
 
     # Replace YOUR_API_KEY with your actual Telegram API key (not the Myriad api key)
-    updater = Updater("")
+    updater = Updater("6633203128:AAHmQZCQvicXeTh68Cy3vmR7IiDq4o318AU")
 
     # Get the dispatcher to register handlers
     dispatcher = updater.dispatcher
@@ -855,4 +861,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
