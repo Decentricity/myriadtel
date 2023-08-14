@@ -19,6 +19,188 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, Upda
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler, CallbackQueryHandler
 from telegram import Message
 
+
+def create_experience(update: Update, context: CallbackContext, expname: str = ""):
+    # action 11: POST /user/experiences
+    telegram_username = update.message.from_user.username
+    with open("emails.json", "r") as file:
+        user_data = json.load(file)
+
+    if telegram_username not in user_data:
+        print(f"Telegram username {telegram_username} not found in emails.json")
+        return
+    
+    at = user_data[telegram_username]['accesstoken']
+    myriad_username = user_data[telegram_username]['myriad_username']
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + at,
+    }
+    url = f"{base_url}/user/experiences"
+    
+    # Use the provided expname if it's not empty, otherwise use the default name
+    experience_name = expname if expname else f"{myriad_username} Default"
+    data = {"name": experience_name}
+    
+    response = requests.post(url, headers=headers, json=data)
+    response_data = response.json()
+    print(response_data)
+
+    # Grab the experience ID from the response
+    experience_id = response_data['id']
+
+    # Add or overwrite the "default_experience" key with both ID and name
+    user_data[telegram_username]['default_experience'] = {
+        "experience_id": experience_id,
+        "experience_name": experience_name
+    }
+
+    with open("emails.json", "w") as file:
+        json.dump(user_data, file)
+
+    update.message.reply_text(f"Default experience set to {experience_name}")
+
+
+
+
+def view_experiences(update: Update, context: CallbackContext, cache_mode=False):
+    print("Entering view_experiences()")
+
+    telegram_username = update.message.from_user.username
+    with open("emails.json", "r") as file:
+        user_data = json.load(file)
+
+    if telegram_username not in user_data:
+        print(f"Telegram username {telegram_username} not found in emails.json")
+        return
+
+    keyboard = []  # Initialize an empty keyboard
+    at = user_data[telegram_username]['accesstoken']
+    myriad_username = user_data[telegram_username]['myriad_username']
+    # Check if experiences are already cached and cache_mode is enabled
+    if 'experiences' in user_data[telegram_username] and cache_mode:
+        experiences = user_data[telegram_username]['experiences']
+        for experience_name, experience_id in experiences.items():
+            keyboard.append([InlineKeyboardButton(experience_name, callback_data=f'toggle_experience {experience_id}')])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        update.message.reply_text(text=f"{myriad_username}, your Myriad.Social Timelines are as follows. (Pin this message so you can easily find it again.)", reply_markup=reply_markup)
+        update.message.reply_text(f"Loaded {len(experiences)} timeline(s) from cache. Click on a Timeline button to set it as default. If you don't see a Timeline you have previously created, try using the /refresh command.")
+        return
+        
+
+    headers = {
+        'accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + at,
+    }
+
+
+    url = f"{base_url}/user/experiences"
+    page = 1
+    pagelimit = 10
+    filter = '{"where":{"deletedAt":{"$exists":false}},"order":"createdAt DESC","include":["user",{"relation":"experience","scope":{"include":[{"relation":"user","scope":{"include":[{"relation":"accountSetting"}]}}]}}]}'
+    seen_ids = set()
+    total_owned_experience = None
+    found_experiences_count = 0
+    experiences = {}  # To store the Experience Names and IDs
+
+    while True:
+        params = {"pageNumber": page, "pageLimit": pagelimit, "filter": filter}
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+
+        if total_owned_experience is None:
+            total_owned_experience = data['meta']['additionalData']['totalOwnedExperience']
+            print(f"Total experiences found for {myriad_username}: {total_owned_experience}")
+            if total_owned_experience == 0:
+                update.message.reply_text("Since you don't have any timelines yet, I am creating a default timeline for you:")
+                create_experience(update,context)
+            
+        filtered_experiences = [exp for exp in data['data'] if exp['experience']['user']['username'] == myriad_username]
+
+        for exp in filtered_experiences:
+            experience_id = exp['experience']['id']
+            if experience_id not in seen_ids:
+                seen_ids.add(experience_id)
+                found_experiences_count += 1
+                experience_name = exp['experience']['name']
+                experiences[experience_name] = experience_id
+                # Append a new button to the keyboard
+                keyboard.append([InlineKeyboardButton(experience_name, callback_data=f'toggle_experience {experience_id}')])
+
+                print(found_experiences_count)
+                print(f"Experience Name: {experience_name}")
+                print(f"Created At: {exp['experience']['createdAt']}")
+                print(f"Tags Allowed: {', '.join(exp['experience']['allowedTags'])}")
+                print(f"Tags Prohibited: {', '.join(exp['experience']['prohibitedTags'])}")
+                print(f"Visibility: {exp['experience']['visibility']}")
+                print(f"Subscribed Count: {exp['experience']['subscribedCount']}")
+                print(f"URL: {exp['experience']['experienceImageURL']}")
+                print("="*50)
+                 # If this is the first experience, send the message with the initial keyboard
+                if found_experiences_count == 1:
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    message = update.message.reply_text(text=f"{myriad_username}, your Myriad.Social Timelines are as follows. (Pin this message so you can easily find it again.)", reply_markup=reply_markup)
+                else:
+                    # Otherwise, edit the existing message to add the new button
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    context.bot.edit_message_reply_markup(chat_id=message.chat_id, message_id=message.message_id, reply_markup=reply_markup)
+
+        if found_experiences_count >= total_owned_experience:
+            update.message.reply_text(f"Loaded {found_experiences_count} timeline(s). Click on a Timeline button to set it as default. ")
+
+            break
+
+        page += 1
+
+    #print(f"Total experiences found for {myriad_username}: {found_experiences_count}")
+
+    # Updating the emails.json file with the experiences
+    if 'experiences' not in user_data[telegram_username]:  # Updated to user_data
+        user_data[telegram_username]['experiences'] = {}
+
+    user_data[telegram_username]['experiences'] = experiences  # Updated to user_data
+    with open("emails.json", "w") as file:
+        json.dump(user_data, file)  # Updated to user_data
+
+    print(f"Experiences for {myriad_username} have been saved to emails.json")
+
+
+def toggle_experience(update: Update, context: CallbackContext, experience_id: str):
+    telegram_username = update.callback_query.from_user.username
+    with open("emails.json", "r") as file:
+        data = json.load(file)
+
+    if 'experiences' not in data[telegram_username]:
+        #update.callback_query.message.reply_text("Please load experiences first!")
+        return
+
+    # Find the experience name by its ID
+    experience_name = None
+    for name, exp_id in data[telegram_username]['experiences'].items():
+        if exp_id == experience_id:
+            experience_name = name
+            break
+
+    if experience_name is None:
+        #update.callback_query.message.reply_text("Experience ID not found!")
+        return
+
+    # Add or overwrite the "default_experience" key with both ID and name
+    data[telegram_username]['default_experience'] = {
+        "experience_id": experience_id,
+        "experience_name": experience_name
+    }
+
+    with open("emails.json", "w") as file:
+        json.dump(data, file)
+
+    update.callback_query.message.reply_text(f"Default experience set to {experience_name}")
+
+
+
+
 def get_user_id(username, at):
     print("Entering get_user_id()")
 
@@ -724,6 +906,24 @@ def viewbuttons(update: Update, context: CallbackContext):
     reply_markup = InlineKeyboardMarkup(keyboard)
     message.reply_text('How many recent posts would you like to see?', reply_markup=reply_markup)
 
+
+
+def getexp():
+    url = f"{BASE_URL}/user/experiences"
+    page = 1
+    pagelimit = 10
+    filter = '{"where":{"userId":"' + f'{USER_ID}' + '","deletedAt":{"$exists":false}},"order":"createdAt DESC","include":["user",{"relation":"experience","scope":{"include":[{"relation":"user","scope":{"include":[{"relation":"accountSetting"}]}}]}}]}'
+    seen_ids = set()
+    while True:
+        params = {"pageNumber": page , "pageLimit": pagelimit, "filter": filter}
+        response = requests.get(url, headers=headers, params=params)
+        data = response.json()
+        print(url)
+        print(data)  # print the entire data
+        break  # break the loop to avoid flooding the output
+
+
+
 # Command handler for /start command
 def start(update: Update, context: CallbackContext) -> int:
     username = update.message.from_user.username
@@ -792,7 +992,9 @@ def button(update: Update, context: CallbackContext) -> None:
     query.answer()
 
     command, *args = query.data.split(' ')
-    if command == 'view_posts':
+    if command == 'toggle_experience':
+        toggle_experience(update, context, args[0])
+    elif command == 'view_posts':
         m_view(update, context, args)
     elif command == 'upvote':
         message_text = query.message.text
@@ -817,6 +1019,12 @@ def button(update: Update, context: CallbackContext) -> None:
     elif command == 'viewbuttons':
         viewbuttons(update, context)
 
+# Define a wrapper function for the create_experience function
+def newtimeline_command(update: Update, context: CallbackContext):
+    # Get the argument from the command, if provided
+    expname = context.args[0] if context.args else ""
+    # Call the create_experience function with the extracted argument
+    create_experience(update, context, expname)
 
 # Message handler for cancellation
 def cancel(update: Update, context: CallbackContext) -> int:
@@ -842,6 +1050,17 @@ def main():
         fallbacks=[CommandHandler('cancel', cancel)],
     )
 
+    # Define the command handlers for /timelines and /refresh
+    def timelines_command(update: Update, context: CallbackContext):
+        view_experiences(update, context, cache_mode=True)
+
+    def refresh_command(update: Update, context: CallbackContext):
+        view_experiences(update, context, cache_mode=False)
+
+    # Add the new command handlers to the dispatcher
+    dispatcher.add_handler(CommandHandler('timelines', timelines_command))
+    dispatcher.add_handler(CommandHandler('refresh', refresh_command))
+
     dispatcher.add_handler(conv_handler)
     dispatcher.add_handler(CommandHandler('start', start))
     dispatcher.add_handler(CommandHandler('instructions', instructions))
@@ -849,6 +1068,8 @@ def main():
     dispatcher.add_handler(CommandHandler('import', m_import))
     dispatcher.add_handler(CommandHandler('embed', m_embed))
     dispatcher.add_handler(CommandHandler('view', viewbuttons))
+    dispatcher.add_handler(CommandHandler('newtimeline', newtimeline_command))
+    
     dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
     dispatcher.add_handler(CallbackQueryHandler(button))  # Add the CallbackQueryHandler directly to the dispatcher
     # Start the bot
@@ -861,3 +1082,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
